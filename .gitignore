@@ -1,0 +1,30 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Data and large artifacts
+data/
+ieee-fraud-detection/
+*.npy
+*.npz
+
+# Environment & secrets
+.env
+*.token
+ibm_token.txt
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Testing & notebooks
+.pytest_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+
+# OS generated files
+.DS_Store
+Thumbs.db

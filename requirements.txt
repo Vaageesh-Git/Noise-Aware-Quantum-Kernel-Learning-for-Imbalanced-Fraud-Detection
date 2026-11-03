@@ -1,0 +1,13 @@
+# Pinned dependencies for Noise-Aware Quantum Kernel Learning project
+# Python 3.10+ required (Current tested environment: Python 3.12)
+
+numpy==2.4.4
+pandas==2.3.3
+scikit-learn==1.9.1
+imbalanced-learn==0.14.2
+xgboost==2.0.3
+matplotlib==3.10.8
+qiskit==2.6.2
+qiskit-aer==0.18.4
+qiskit-ibm-runtime==0.52.1
+pytest==9.2.0
