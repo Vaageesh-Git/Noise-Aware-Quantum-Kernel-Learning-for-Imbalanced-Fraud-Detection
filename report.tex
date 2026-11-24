@@ -3,6 +3,7 @@
 \usepackage[a4paper,margin=1in]{geometry}
 \usepackage{amsmath,amssymb}
 \usepackage{booktabs}
+\usepackage{graphicx}
 \usepackage{cite}
 \usepackage{setspace}
 \usepackage{hyperref}
@@ -10,6 +11,7 @@
 \onehalfspacing
 \setlength{\parindent}{0pt}
 \setlength{\parskip}{6pt}
+\setlength{\tabcolsep}{5pt}
 
 \title{\textbf{Noise-Aware Quantum Kernel Learning for Imbalanced Fraud Detection: \\ Simulator-to-Hardware Benchmarking on IBM Quantum}}
 \author{Vaageesh Kumar Singh}
@@ -113,6 +115,7 @@ Table~\ref{tab:circuit_complexity} details the transpiled circuit depth and two-
 \small
 \caption{Compiled circuit complexity on IBM 127-qubit architecture.}
 \label{tab:circuit_complexity}
+\resizebox{\linewidth}{!}{%
 \begin{tabular}{lccccc}
 \toprule
 \textbf{Feature Map} & \textbf{Qubits ($n$)} & \textbf{Reps} & \textbf{Entanglement} & \textbf{Transpiled Depth} & \textbf{2-Qubit ECR Gates} \\
@@ -128,10 +131,11 @@ ZZFeatureMap       & 6 & 2 & linear & 143 & 38 \\
 PauliFeatureMap    & 4 & 1 & linear & 66 & 10 \\
 PauliFeatureMap    & 6 & 1 & linear & 95 & 18 \\
 \bottomrule
-\end{tabular}
+\end{tabular}%
+}
 \end{table}
 
-\subsection{Unified Quantum Kernel Estimation & SVM Optimization}
+\subsection{Unified Quantum Kernel Estimation \& SVM Optimization}
 
 A single unified kernel computation engine evaluates Eq.~\eqref{eq:kernel_def}. For training kernel matrices ($X_a = X_b$), symmetry is enforced ($K_{ij} = K_{ji}$) and diagonal entries are set to $1.0$, requiring only $N(N-1)/2$ circuit evaluations. For $N=300$, this evaluates 44,850 off-diagonal pairs; for test kernels ($200 \times 300$), 60,000 evaluations are performed.
 
@@ -174,9 +178,10 @@ Table~\ref{tab:classical_results} reports classical performance across Regime A 
 \small
 \caption{Classical baseline benchmark results (Mean $\pm$ Std over 5 repeats).}
 \label{tab:classical_results}
+\resizebox{\linewidth}{!}{%
 \begin{tabular}{llcccc}
 \toprule
-\textbf{Regime} & \textbf{Model} & \textbf{PR-AUC (Main)} & \textbf{ROC-AUC} & \textbf{Recall} & \textbf{F1-Score} \\
+\textbf{Regime} & \textbf{Model} & \textbf{PR-AUC} & \textbf{ROC-AUC} & \textbf{Recall} & \textbf{F1-Score} \\
 \midrule
 Full Features (218) & Dummy (Most Freq) & 0.0350 & 0.5000 & 0.00\% & 0.0000 \\
 Full Features (218) & Random Forest & 0.4497 & 0.8682 & 73.29\% & 0.2453 \\
@@ -192,7 +197,8 @@ Fair Subset ($n=6$) & Random Forest & $0.3253 \pm 0.1460$ & $0.7535 \pm 0.0833$ 
 Fair Subset ($n=6$) & SVM (RBF)     & $\mathbf{0.3696 \pm 0.1147}$ & $0.7789 \pm 0.0401$ & $65.0\%$ & $\mathbf{0.3892 \pm 0.0835}$ \\
 Fair Subset ($n=6$) & XGBoost       & $0.3418 \pm 0.1868$ & $0.7374 \pm 0.0841$ & $60.0\%$ & $0.3168 \pm 0.1168$ \\
 \bottomrule
-\end{tabular}
+\end{tabular}%
+}
 \end{table}
 
 The Dummy model demonstrates the accuracy paradox: achieving 96.50\% accuracy on the full set and 90.00\% on the subset, but with 0.00\% recall and PR-AUC equal to the baseline fraud rate. When restricted to identical low-dimensional features, classical RBF-SVM achieves PR-AUC values of $0.3621$ (4 features) and $0.3696$ (6 features), establishing the direct targets for quantum benchmarking.
@@ -206,6 +212,7 @@ Table~\ref{tab:ideal_ranking} ranks all quantum feature map configurations evalu
 \small
 \caption{Quantum feature map ranking under Setting A (Mean over 5 repeats).}
 \label{tab:ideal_ranking}
+\resizebox{\linewidth}{!}{%
 \begin{tabular}{clccccc}
 \toprule
 \textbf{Rank} & \textbf{Feature Map} & \textbf{Qubits} & \textbf{Reps} & \textbf{PR-AUC} & \textbf{ROC-AUC} & \textbf{Alignment (KTA)} \\
@@ -219,7 +226,8 @@ Table~\ref{tab:ideal_ranking} ranks all quantum feature map configurations evalu
 7 & ZZFeatureMap / Pauli & 4 & 2 & 0.2441 & 0.7317 & 0.5268 \\
 8 & ZZFeatureMap / Pauli & 6 & 2 & 0.2400 & 0.7213 & 0.5161 \\
 \bottomrule
-\end{tabular}
+\end{tabular}%
+}
 \end{table}
 
 \texttt{CustomAngleRingMap} (reps 1) achieves the highest PR-AUC ($0.3675$ on 4 qubits, $0.3623$ on 6 qubits), matching the classical RBF-SVM baseline ($0.3621$). Conversely, \texttt{ZZFeatureMap} suffers from poor alignment ($KTA \approx 0.52 - 0.59$) and degraded PR-AUC ($0.24 - 0.28$). The pairwise phase products $(\pi - x_i)(\pi - x_j)$ and depth-66 entangling ladders induce severe phase oscillations on continuous tabular data, whereas shallow single-qubit angle rotations preserve geometric structure. Setting B (2048 shots) exhibited near-identical mean PR-AUC ($0.3634$), confirming that statistical shot noise alone does not degrade the decision boundary.
@@ -233,6 +241,7 @@ Table~\ref{tab:noisy_results} summarizes the impact of realistic device noise (\
 \small
 \caption{Setting C Noisy simulation distortion on IBM FakeSherbrooke.}
 \label{tab:noisy_results}
+\resizebox{\linewidth}{!}{%
 \begin{tabular}{lccccc}
 \toprule
 \textbf{Configuration} & \textbf{Depth} & \textbf{Frobenius Error} & \textbf{Pearson Corr.} & \textbf{Var. Retention} & \textbf{PR-AUC} \\
@@ -241,7 +250,8 @@ CustomAngleRingMap (4Q) & \textbf{5} & \textbf{11.65\%} & \textbf{0.9954} & \tex
 CustomAngleRingMap (6Q) & \textbf{5} & \textbf{21.38\%} & \textbf{0.9921} & \textbf{60.14\%} & \textbf{0.4154} \\
 ZZFeatureMap (4Q)       & 66 & 14.83\% & 0.9995 & 69.97\% & 0.2961 \\
 \bottomrule
-\end{tabular}
+\end{tabular}%
+}
 \end{table}
 
 Physical noise induces measurable kernel concentration. As qubits increase from 4 to 6, Frobenius error doubles from $11.65\%$ to $21.38\%$, and off-diagonal variance retention drops from $75.39\%$ to $60.14\%$. Because each additional qubit introduces independent decoherence channels, the off-diagonal entries contract toward a uniform background value. Deeper circuits (\texttt{ZZFeatureMap}) degrade severely to 0.2961 PR-AUC, demonstrating that shallow circuits are essential on near-term devices.
@@ -255,6 +265,7 @@ Table~\ref{tab:hardware_results} presents the results of Setting D across raw an
 \small
 \caption{Setting D Hardware execution metrics and error mitigation recovery.}
 \label{tab:hardware_results}
+\resizebox{\linewidth}{!}{%
 \begin{tabular}{lcccc}
 \toprule
 \textbf{Execution Protocol} & \textbf{Frobenius Rel. Error} & \textbf{Pearson Correlation} & \textbf{Variance Retention} & \textbf{Alignment (KTA)} \\
@@ -263,7 +274,8 @@ D1: Raw Unmitigated Hardware & 1.73\% & 0.9954 & 98.54\% & 0.6799 \\
 D2: Mitigated (DD + Twirling) & \textbf{1.72\%} & \textbf{0.9965} & 98.18\% & 0.6787 \\
 D3: Mitigated + Classical PSD & 1.93\% & \textbf{0.9969} & 96.93\% & 0.6786 \\
 \bottomrule
-\end{tabular}
+\end{tabular}%
+}
 \end{table}
 
 Active error mitigation via Dynamical Decoupling and Pauli Twirling improves Pearson correlation with the ideal kernel from $0.9954$ to $0.9965$. Enforcing Mercer's positive semi-definiteness via classical spectral clipping further raises correlation to $0.9969$. Because the slice is small ($N=20$), the primary scientific conclusion is the quantitative recovery of kernel Gram matrix fidelity rather than small-sample classification metrics.
@@ -277,6 +289,7 @@ Table~\ref{tab:imbalance_study} evaluates imbalance remediation strategies and s
 \small
 \caption{Class imbalance remediation strategies and fraud ratio sensitivity.}
 \label{tab:imbalance_study}
+\resizebox{\linewidth}{!}{%
 \begin{tabular}{llcccc}
 \toprule
 \textbf{Factor} & \textbf{Level} & \textbf{Classical PR-AUC} & \textbf{Quantum PR-AUC} & \textbf{Quantum Recall} & \textbf{Quantum F1} \\
@@ -291,7 +304,8 @@ Fraud Ratio & 0.10 (Standard 10\%) & \textbf{0.3357} & 0.3327 & 66.0\% & 0.3157 
 Fraud Ratio & 0.20 (Moderate 20\%) & \textbf{0.4001} & 0.3991 & 70.0\% & 0.3250 \\
 Fraud Ratio & 0.50 (Balanced 50\%) & 0.3709 & \textbf{0.3752} & 79.0\% & 0.3107 \\
 \bottomrule
-\end{tabular}
+\end{tabular}%
+}
 \end{table}
 
 Without adjustment (\texttt{none}), fraud recall collapses to $4.0\%$, highlighting the accuracy paradox. Cost-sensitive class weighting proves to be the superior strategy, elevating recall to $62.0\%$ while achieving the highest PR-AUC ($0.3674$) and F1-score ($0.3685$). SMOTE underperforms on the quantum model because linear Euclidean interpolation in input space does not align with the non-linear Riemannian curvature of quantum Hilbert space.
