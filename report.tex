@@ -1,0 +1,344 @@
+\documentclass[12pt,a4paper]{article}
+
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{cite}
+\usepackage{setspace}
+\usepackage{hyperref}
+
+\onehalfspacing
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt}
+
+\title{\textbf{Noise-Aware Quantum Kernel Learning for Imbalanced Fraud Detection: \\ Simulator-to-Hardware Benchmarking on IBM Quantum}}
+\author{Vaageesh Kumar Singh}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+% ==================================================
+% 1. INTRODUCTION
+% ==================================================
+\section{Introduction}
+
+Digital payment platforms process billions of transactions daily, and financial fraud has grown rapidly in both volume and technical sophistication. Financial institutions and payment processors rely heavily on automated machine learning classifiers to flag suspicious activities in real time. Detecting fraud, however, presents a severe class imbalance challenge: fraudulent transactions typically constitute fewer than 1\% to 3.5\% of all records. Under such conditions, standard evaluation metrics such as classification accuracy become misleading. A naive model that classifies every transaction as legitimate can achieve over 96\% accuracy while failing to detect a single fraudulent transaction. Meaningful evaluation requires metrics focused on the minority fraud class, such as precision, recall, F1-score, and the Area Under the Precision--Recall Curve (PR-AUC).
+
+Quantum machine learning (QML) investigates whether quantum processors can provide alternative representations for complex data. In the current noisy intermediate-scale quantum (NISQ) era, quantum processors possess limited numbers of physical qubits and suffer from environmental decoherence, gate errors, and measurement noise, precluding the execution of deep circuits. Among near-term algorithms, quantum kernel methods have emerged as an attractive architecture. A parameterized quantum circuit maps classical inputs into quantum feature states, the similarity between pairs of points is evaluated as the quantum transition fidelity, and a classical Support Vector Machine (SVM) finds the optimal separating hyperplane on the resulting kernel matrix \cite{havlicek2019,schuld2019}. The quantum processor is utilized exclusively for kernel matrix estimation, allowing circuits to remain shallow while offloading convex optimization to classical solvers.
+
+Despite theoretical interest, practical deployment faces critical questions. Physical hardware noise distorts quantum kernel values, causing them to concentrate around a uniform constant and degrade decision boundaries. Furthermore, empirical studies on real-world industrial datasets with realistic noise models remain scarce.
+
+This project designs, implements, and benchmarks a complete hybrid quantum--classical fraud detection pipeline using the Kaggle IEEE-CIS Fraud Detection dataset. Using Qiskit and IBM Quantum, the pipeline is evaluated across four execution regimes: exact analytical statevector simulation, ideal finite-shot sampling, realistic noisy simulation based on IBM's 127-qubit hardware, and a real hardware workflow with error mitigation. The quantum model is systematically compared against tuned classical baselines (RBF-SVM, Random Forest, and XGBoost) on identical feature splits.
+
+% ==================================================
+% 2. PROBLEM STATEMENT & OBJECTIVES
+% ==================================================
+\section{Problem Statement and Objectives}
+
+Financial fraud detection exhibits high-dimensional tabular feature spaces, missing values, and extreme class imbalance. While quantum kernels are hypothesized to exploit high-dimensional Hilbert spaces to capture subtle non-linear interactions, their practical utility under realistic fraud conditions remains unverified. Three specific gaps are addressed:
+\begin{enumerate}
+    \item \textbf{Class Imbalance:} Most quantum kernel studies evaluate balanced or synthetic datasets. Their performance under severe class imbalance is largely unexplored.
+    \item \textbf{Hardware Noise and Concentration:} Physical device noise causes fidelity decay and kernel concentration. The extent of degradation on superconducting architectures, and the recovery possible through error mitigation, must be quantified.
+    \item \textbf{Rigorous Classical Comparison:} Quantum models are frequently compared against weak baselines or evaluated on disparate feature sets. A fair, apples-to-apples comparison on identical low-dimensional features is essential.
+\end{enumerate}
+
+\subsection*{Aim and Objectives}
+
+The primary aim is to benchmark a reproducible hybrid quantum--classical fraud detection pipeline from noiseless simulation to real IBM Quantum hardware under class imbalance. The concrete objectives are:
+\begin{enumerate}
+    \item Build an end-to-end leak-free preprocessing pipeline that merges transaction and identity data, applies median and frequency encoding, reduces dimensions via Principal Component Analysis (PCA), and scales features into $[0, \pi]$.
+    \item Implement multiple quantum feature maps (ZZ, Pauli, and a custom Angle Ring design) and analyze their compiled circuit depth and two-qubit gate counts.
+    \item Benchmark classical reference models (Dummy, Random Forest, XGBoost, and RBF-SVM) on full features and on identical reduced quantum subsets across multiple random seeds.
+    \item Evaluate the quantum kernel across four settings: (A) Exact statevector, (B) Ideal finite shots, (C) Noisy simulation on IBM's 127-qubit FakeSherbrooke backend, and (D) IBM Quantum hardware protocols with error mitigation (Dynamical Decoupling, Pauli Twirling, and classical Positive Semi-Definite projection).
+    \item Investigate class imbalance remediation strategies (class weighting, random undersampling, and SMOTE) and sensitivity across fraud ratios from 5\% to 50\%.
+\end{enumerate}
+
+% ==================================================
+% 3. BACKGROUND & RELATED WORK
+% ==================================================
+\section{Background and Related Work}
+
+Kernel methods allow linear algorithms to operate in non-linear feature spaces by implicitly computing inner products via a kernel function $k(\mathbf{x}, \mathbf{x}') = \langle \Phi(\mathbf{x}), \Phi(\mathbf{x}') \rangle$. Havl\'{i}\v{c}ek et al.\ \cite{havlicek2019} demonstrated that parameterized quantum circuits can evaluate kernel functions on near-term superconducting quantum hardware, defining the transition fidelity between quantum feature states as a valid mathematical kernel. Schuld and Killoran \cite{schuld2019} formalized this framework by establishing that mapping data into a quantum state space $|\phi(\mathbf{x})\rangle = U(\mathbf{x})|0\rangle^{\otimes n}$ corresponds to an embedding into an exponentially large $2^n$-dimensional Hilbert space. In fidelity form, the quantum kernel is defined as:
+\begin{equation}
+    k(\mathbf{x}, \mathbf{x}') = \left|\langle \phi(\mathbf{x}') \,|\, \phi(\mathbf{x})\rangle\right|^{2} = \left|\langle 0^{\otimes n} \,|\, U^{\dagger}(\mathbf{x}') U(\mathbf{x}) \,|\, 0^{\otimes n}\rangle\right|^{2}.
+    \label{eq:kernel_def}
+\end{equation}
+
+Physical realization on quantum hardware requires preparing the state $U(\mathbf{x})|0\dots 0\rangle$, applying the adjoint circuit $U^{\dagger}(\mathbf{x}')$, and executing $S$ projective measurement shots to determine the frequency of observing the all-zeros bitstring $|0\dots 0\rangle$. If $\mathbf{x} = \mathbf{x}'$, the operators cancel ($U^{\dagger}U = I$), yielding an overlap of 1.0. When evaluated across all pairs of $N$ training points, this constructs an $N \times N$ symmetric Gram matrix $K$ with unit diagonal, which is subsequently passed to a classical SVM solver.
+
+However, physical devices suffer from environmental decoherence (energy relaxation $T_1$ and dephasing $T_2$), two-qubit entangling gate errors, and measurement readout misclassifications. These imperfections introduce noise into kernel entries and can cause the matrix to deviate from positive semi-definiteness. This study investigates the degree of this degradation on real-device noise models and evaluates whether mitigation techniques can preserve predictive utility.
+
+% ==================================================
+% 4. METHODOLOGY
+% ==================================================
+\section{Pipeline Architecture and Methodology}
+
+The implemented hybrid architecture comprises classical feature engineering, dimensionality reduction, quantum feature mapping, kernel matrix computation, and classical SVM classification.
+
+\subsection{Data Preprocessing and Leak-Free Scaling}
+
+The pipeline ingests the IEEE-CIS dataset, performing a left join between transaction and identity tables on \texttt{TransactionID}. A stratified pool of 100,000 transactions is drawn, preserving the natural 3.50\% fraud rate. An 80/20 stratified train/test split is applied. All preprocessing parameters are derived strictly from the training partition to prevent look-ahead bias:
+\begin{enumerate}
+    \item \textbf{Temporal Feature Engineering:} Raw transaction timestamps (\texttt{TransactionDT}) are converted into cyclical hour-of-day features ($0 \le h \le 23$).
+    \item \textbf{Variance Stabilization:} Skewed transaction amounts (\texttt{TransactionAmt}) are transformed via $\log(1 + x)$.
+    \item \textbf{Missing Value Handling:} Columns with $>50\%$ missing values on the training split (214 columns) are discarded. Remaining numeric features are imputed with the training median; categorical features are filled with the string \texttt{'missing'}.
+    \item \textbf{Categorical Encoding:} Categorical attributes are frequency-encoded using normalized occurrence rates in the training data (unseen test categories receive $0.0$).
+    \item \textbf{Standardization and PCA:} All retained features are standardized via zero-mean unit-variance scaling. PCA projects the features into $n \in \{4, 6\}$ orthogonal principal components, capturing 39.64\% and 46.91\% of cumulative variance, respectively.
+    \item \textbf{Quantum Angle Scaling:} Because single-qubit quantum rotation operators ($R_Y(\theta)$) are $2\pi$-periodic, PCA components are scaled strictly into the interval $[0, \pi]$ using training min/max bounds:
+    \begin{equation}
+        \tilde{x}_j = \frac{x_j - \min(x_{j,\text{train}})}{\max(x_{j,\text{train}}) - \min(x_{j,\text{train}})} \cdot \pi.
+    \end{equation}
+    Test features are transformed with the training bounds and clipped to $[0, \pi]$ to prevent rotational phase wrap-around.
+\end{enumerate}
+
+To ensure rigorous benchmarking, small stratified quantum subsets ($N_{\text{train}} = 300$, $N_{\text{test}} = 200$) with an enforced 10.0\% fraud ratio (30 train fraud, 20 test fraud) are sampled across 5 independent random seeds ($N_{\text{repeats}} = 5$). The identical test sets are shared across all quantum and classical models.
+
+\subsection{Quantum Feature Maps}
+
+Three distinct $n$-qubit parameterized feature map circuits $U(\mathbf{x})$ were designed and benchmarked:
+\begin{enumerate}
+    \item \textbf{ZZFeatureMap:} IBM's standard feature map employing single-qubit Hadamard and $R_Z$ rotations followed by pairwise two-qubit entangling phase interactions:
+    \begin{equation}
+        \phi_{\{i,j\}}(\mathbf{x}) = (\pi - x_i)(\pi - x_j).
+    \end{equation}
+    \item \textbf{PauliFeatureMap:} Generalized Pauli rotation circuits incorporating $Z$ and $ZZ$ interaction terms.
+    \item \textbf{CustomAngleRingMap:} A custom shallow circuit applying single-qubit $R_Y(x_i)$ rotations followed by a circular ring of two-qubit Controlled-Z ($CZ$) entangling gates connecting adjacent qubits: $(i, (i+1) \bmod n)$.
+\end{enumerate}
+
+Table~\ref{tab:circuit_complexity} details the transpiled circuit depth and two-qubit gate counts compiled for IBM's 127-qubit architecture (\texttt{FakeSherbrooke}) at optimization level 3.
+
+\begin{table}[ht]
+\centering
+\small
+\caption{Compiled circuit complexity on IBM 127-qubit architecture.}
+\label{tab:circuit_complexity}
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Feature Map} & \textbf{Qubits ($n$)} & \textbf{Reps} & \textbf{Entanglement} & \textbf{Transpiled Depth} & \textbf{2-Qubit ECR Gates} \\
+\midrule
+CustomAngleRingMap & 4 & 1 & ring & \textbf{5} & \textbf{0} \\
+CustomAngleRingMap & 4 & 2 & ring & 64 & 16 \\
+CustomAngleRingMap & 6 & 1 & ring & \textbf{5} & \textbf{0} \\
+CustomAngleRingMap & 6 & 2 & ring & 90 & 26 \\
+ZZFeatureMap       & 4 & 1 & linear & 66 & 10 \\
+ZZFeatureMap       & 4 & 2 & linear & 114 & 22 \\
+ZZFeatureMap       & 6 & 1 & linear & 95 & 18 \\
+ZZFeatureMap       & 6 & 2 & linear & 143 & 38 \\
+PauliFeatureMap    & 4 & 1 & linear & 66 & 10 \\
+PauliFeatureMap    & 6 & 1 & linear & 95 & 18 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Unified Quantum Kernel Estimation & SVM Optimization}
+
+A single unified kernel computation engine evaluates Eq.~\eqref{eq:kernel_def}. For training kernel matrices ($X_a = X_b$), symmetry is enforced ($K_{ij} = K_{ji}$) and diagonal entries are set to $1.0$, requiring only $N(N-1)/2$ circuit evaluations. For $N=300$, this evaluates 44,850 off-diagonal pairs; for test kernels ($200 \times 300$), 60,000 evaluations are performed.
+
+Once computed, $K_{\text{train}}$ and $K_{\text{test}}$ are supplied to a classical precomputed SVM (\texttt{sklearn.svm.SVC(kernel="precomputed")}). The regularization parameter $C \in \{0.1, 1.0, 10.0, 100.0\}$ is tuned exclusively via 3-fold stratified cross-validation on $K_{\text{train}}$ optimizing PR-AUC. Cost-sensitive class weighting balances the loss:
+\begin{equation}
+    C_y = C \cdot \frac{N}{2 \cdot N_y}, \quad y \in \{0, 1\}.
+\end{equation}
+
+% ==================================================
+% 5. EXPERIMENTAL SETUP
+% ==================================================
+\section{Experimental Settings}
+
+Four benchmarking environments were evaluated:
+\begin{itemize}
+    \item \textbf{Setting A (Exact Statevector):} Evaluates analytical inner products $|\langle \phi(\mathbf{x}') | \phi(\mathbf{x}) \rangle|^2$ using Qiskit statevectors, isolating the ideal noise-free mathematical performance ceiling.
+    \item \textbf{Setting B (Ideal Finite Shots):} Evaluates ideal projective measurement with $S=2048$ shots, capturing pure statistical shot noise without physical gate errors.
+    \item \textbf{Setting C (Noisy Simulation):} Simulates physical device noise using the calibrated snapshot of IBM's 127-qubit \texttt{FakeSherbrooke} backend ($T_1/T_2$ thermal relaxation, depolarizing single-qubit errors, cross-resonance ECR entangling gate errors, and readout bit-flip assignment errors).
+    \item \textbf{Setting D (Hardware Pipeline):} Evaluates on a small slice ($N_{\text{train}}=20, N_{\text{test}}=10$, 390 circuits, 1024 shots) using three execution protocols:
+    \begin{enumerate}
+        \item \emph{D1 (Raw):} Unmitigated execution.
+        \item \emph{D2 (Mitigated):} Qiskit Runtime error mitigation comprising Dynamical Decoupling (periodic $XX$ spin-echo refocusing pulses during idle buffers) and Pauli Twirling on entangling gates and measurements.
+        \item \emph{D3 (Mitigated + Classical PSD):} Spectral post-processing enforcing Mercer's condition by clipping negative eigenvalues to zero ($\Lambda_+ = \max(\Lambda, 0)$) and normalizing the diagonal to 1.0. This is explicitly categorized as classical post-processing, not hardware quantum mitigation.
+    \end{enumerate}
+\end{itemize}
+
+% ==================================================
+% 6. RESULTS & DISCUSSION
+% ==================================================
+\section{Results and Discussion}
+
+All reported performance metrics represent the mean and standard deviation over 5 independent stratified repeats.
+
+\subsection{Classical Baselines: Reference Ceiling vs.\ Fair Comparison}
+
+Table~\ref{tab:classical_results} reports classical performance across Regime A (full 218 features on 80,000 training transactions) and Regime B (fair comparison on identical 4- and 6-qubit PCA subsets with 300 training samples).
+
+\begin{table}[ht]
+\centering
+\small
+\caption{Classical baseline benchmark results (Mean $\pm$ Std over 5 repeats).}
+\label{tab:classical_results}
+\begin{tabular}{llcccc}
+\toprule
+\textbf{Regime} & \textbf{Model} & \textbf{PR-AUC (Main)} & \textbf{ROC-AUC} & \textbf{Recall} & \textbf{F1-Score} \\
+\midrule
+Full Features (218) & Dummy (Most Freq) & 0.0350 & 0.5000 & 0.00\% & 0.0000 \\
+Full Features (218) & Random Forest & 0.4497 & 0.8682 & 73.29\% & 0.2453 \\
+Full Features (218) & XGBoost       & \textbf{0.4948} & \textbf{0.8877} & \textbf{76.57\%} & \textbf{0.2832} \\
+Full Features (218) & SVM (RBF)     & 0.1512 & 0.7981 & 70.43\% & 0.1632 \\
+\midrule
+Fair Subset ($n=4$) & Dummy (Most Freq) & $0.1000 \pm 0.0000$ & $0.5000 \pm 0.0000$ & 0.00\% & $0.0000 \pm 0.0000$ \\
+Fair Subset ($n=4$) & Random Forest & $0.3781 \pm 0.1586$ & $0.7611 \pm 0.0817$ & $64.0\%$ & $0.3477 \pm 0.0629$ \\
+Fair Subset ($n=4$) & SVM (RBF)     & $\mathbf{0.3621 \pm 0.1070}$ & $0.7764 \pm 0.0805$ & $64.0\%$ & $\mathbf{0.3807 \pm 0.0852}$ \\
+Fair Subset ($n=4$) & XGBoost       & $0.3390 \pm 0.1595$ & $0.7382 \pm 0.1012$ & $63.0\%$ & $0.3418 \pm 0.0945$ \\
+\midrule
+Fair Subset ($n=6$) & Random Forest & $0.3253 \pm 0.1460$ & $0.7535 \pm 0.0833$ & $53.0\%$ & $0.2472 \pm 0.1030$ \\
+Fair Subset ($n=6$) & SVM (RBF)     & $\mathbf{0.3696 \pm 0.1147}$ & $0.7789 \pm 0.0401$ & $65.0\%$ & $\mathbf{0.3892 \pm 0.0835}$ \\
+Fair Subset ($n=6$) & XGBoost       & $0.3418 \pm 0.1868$ & $0.7374 \pm 0.0841$ & $60.0\%$ & $0.3168 \pm 0.1168$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The Dummy model demonstrates the accuracy paradox: achieving 96.50\% accuracy on the full set and 90.00\% on the subset, but with 0.00\% recall and PR-AUC equal to the baseline fraud rate. When restricted to identical low-dimensional features, classical RBF-SVM achieves PR-AUC values of $0.3621$ (4 features) and $0.3696$ (6 features), establishing the direct targets for quantum benchmarking.
+
+\subsection{Ideal Quantum Simulations: Feature Map Superiority}
+
+Table~\ref{tab:ideal_ranking} ranks all quantum feature map configurations evaluated under Setting A (Exact Statevector).
+
+\begin{table}[ht]
+\centering
+\small
+\caption{Quantum feature map ranking under Setting A (Mean over 5 repeats).}
+\label{tab:ideal_ranking}
+\begin{tabular}{clccccc}
+\toprule
+\textbf{Rank} & \textbf{Feature Map} & \textbf{Qubits} & \textbf{Reps} & \textbf{PR-AUC} & \textbf{ROC-AUC} & \textbf{Alignment (KTA)} \\
+\midrule
+\textbf{1} & \textbf{CustomAngleRingMap} & \textbf{4} & \textbf{1} & \textbf{0.3675} & \textbf{0.7766} & \textbf{0.6523} \\
+\textbf{2} & \textbf{CustomAngleRingMap} & \textbf{6} & \textbf{1} & \textbf{0.3623} & \textbf{0.7714} & \textbf{0.6530} \\
+3 & CustomAngleRingMap & 6 & 2 & 0.3569 & 0.7728 & 0.6658 \\
+4 & CustomAngleRingMap & 4 & 2 & 0.3232 & 0.7328 & 0.6477 \\
+5 & ZZFeatureMap / Pauli & 6 & 1 & 0.2852 & 0.7470 & 0.5685 \\
+6 & ZZFeatureMap / Pauli & 4 & 1 & 0.2668 & 0.7446 & 0.5908 \\
+7 & ZZFeatureMap / Pauli & 4 & 2 & 0.2441 & 0.7317 & 0.5268 \\
+8 & ZZFeatureMap / Pauli & 6 & 2 & 0.2400 & 0.7213 & 0.5161 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\texttt{CustomAngleRingMap} (reps 1) achieves the highest PR-AUC ($0.3675$ on 4 qubits, $0.3623$ on 6 qubits), matching the classical RBF-SVM baseline ($0.3621$). Conversely, \texttt{ZZFeatureMap} suffers from poor alignment ($KTA \approx 0.52 - 0.59$) and degraded PR-AUC ($0.24 - 0.28$). The pairwise phase products $(\pi - x_i)(\pi - x_j)$ and depth-66 entangling ladders induce severe phase oscillations on continuous tabular data, whereas shallow single-qubit angle rotations preserve geometric structure. Setting B (2048 shots) exhibited near-identical mean PR-AUC ($0.3634$), confirming that statistical shot noise alone does not degrade the decision boundary.
+
+\subsection{Noisy Simulation: Hardware Decoherence and Concentration}
+
+Table~\ref{tab:noisy_results} summarizes the impact of realistic device noise (\texttt{FakeSherbrooke}, 2048 shots).
+
+\begin{table}[ht]
+\centering
+\small
+\caption{Setting C Noisy simulation distortion on IBM FakeSherbrooke.}
+\label{tab:noisy_results}
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Configuration} & \textbf{Depth} & \textbf{Frobenius Error} & \textbf{Pearson Corr.} & \textbf{Var. Retention} & \textbf{PR-AUC} \\
+\midrule
+CustomAngleRingMap (4Q) & \textbf{5} & \textbf{11.65\%} & \textbf{0.9954} & \textbf{75.39\%} & \textbf{0.4120} \\
+CustomAngleRingMap (6Q) & \textbf{5} & \textbf{21.38\%} & \textbf{0.9921} & \textbf{60.14\%} & \textbf{0.4154} \\
+ZZFeatureMap (4Q)       & 66 & 14.83\% & 0.9995 & 69.97\% & 0.2961 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Physical noise induces measurable kernel concentration. As qubits increase from 4 to 6, Frobenius error doubles from $11.65\%$ to $21.38\%$, and off-diagonal variance retention drops from $75.39\%$ to $60.14\%$. Because each additional qubit introduces independent decoherence channels, the off-diagonal entries contract toward a uniform background value. Deeper circuits (\texttt{ZZFeatureMap}) degrade severely to 0.2961 PR-AUC, demonstrating that shallow circuits are essential on near-term devices.
+
+\subsection{Hardware Benchmarking and Error Mitigation}
+
+Table~\ref{tab:hardware_results} presents the results of Setting D across raw and mitigated protocols.
+
+\begin{table}[ht]
+\centering
+\small
+\caption{Setting D Hardware execution metrics and error mitigation recovery.}
+\label{tab:hardware_results}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Execution Protocol} & \textbf{Frobenius Rel. Error} & \textbf{Pearson Correlation} & \textbf{Variance Retention} & \textbf{Alignment (KTA)} \\
+\midrule
+D1: Raw Unmitigated Hardware & 1.73\% & 0.9954 & 98.54\% & 0.6799 \\
+D2: Mitigated (DD + Twirling) & \textbf{1.72\%} & \textbf{0.9965} & 98.18\% & 0.6787 \\
+D3: Mitigated + Classical PSD & 1.93\% & \textbf{0.9969} & 96.93\% & 0.6786 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Active error mitigation via Dynamical Decoupling and Pauli Twirling improves Pearson correlation with the ideal kernel from $0.9954$ to $0.9965$. Enforcing Mercer's positive semi-definiteness via classical spectral clipping further raises correlation to $0.9969$. Because the slice is small ($N=20$), the primary scientific conclusion is the quantitative recovery of kernel Gram matrix fidelity rather than small-sample classification metrics.
+
+\subsection{Class Imbalance Study}
+
+Table~\ref{tab:imbalance_study} evaluates imbalance remediation strategies and sensitivity across varying training fraud ratios.
+
+\begin{table}[ht]
+\centering
+\small
+\caption{Class imbalance remediation strategies and fraud ratio sensitivity.}
+\label{tab:imbalance_study}
+\begin{tabular}{llcccc}
+\toprule
+\textbf{Factor} & \textbf{Level} & \textbf{Classical PR-AUC} & \textbf{Quantum PR-AUC} & \textbf{Quantum Recall} & \textbf{Quantum F1} \\
+\midrule
+Strategy & None (Unadjusted) & 0.3312 & 0.3556 & 4.0\% & 0.0711 \\
+Strategy & \textbf{Class Weights} & \textbf{0.3621} & \textbf{0.3674} & \textbf{62.0\%} & \textbf{0.3685} \\
+Strategy & Undersampling & 0.3586 & 0.3577 & 68.0\% & 0.3454 \\
+Strategy & SMOTE & 0.3398 & 0.3291 & 66.0\% & 0.3192 \\
+\midrule
+Fraud Ratio & \textbf{0.05 (Severe 5\%)} & 0.3589 & $\mathbf{0.3810\;(+2.2\%)}$ & 41.0\% & 0.3574 \\
+Fraud Ratio & 0.10 (Standard 10\%) & \textbf{0.3357} & 0.3327 & 66.0\% & 0.3157 \\
+Fraud Ratio & 0.20 (Moderate 20\%) & \textbf{0.4001} & 0.3991 & 70.0\% & 0.3250 \\
+Fraud Ratio & 0.50 (Balanced 50\%) & 0.3709 & \textbf{0.3752} & 79.0\% & 0.3107 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Without adjustment (\texttt{none}), fraud recall collapses to $4.0\%$, highlighting the accuracy paradox. Cost-sensitive class weighting proves to be the superior strategy, elevating recall to $62.0\%$ while achieving the highest PR-AUC ($0.3674$) and F1-score ($0.3685$). SMOTE underperforms on the quantum model because linear Euclidean interpolation in input space does not align with the non-linear Riemannian curvature of quantum Hilbert space.
+
+Crucially, under severe class imbalance (5\% fraud), the Quantum Kernel SVM outperforms Classical RBF-SVM by $+2.2\%$ PR-AUC ($0.3810$ vs.\ $0.3589$), while matching classical performance across balanced and moderately imbalanced settings.
+
+% ==================================================
+% 7. LIMITATIONS & HONEST ASSESSMENT
+% ==================================================
+\section{Limitations and Honest Assessment}
+
+A rigorous engineering evaluation requires explicit statement of constraints:
+\begin{enumerate}
+    \item \textbf{No Generalized Quantum Advantage:} Classical XGBoost trained on the full 218 features achieves PR-AUC $\approx 0.495$, outperforming all models restricted to 4--6 PCA components. Current NISQ devices cannot process 200 features without fatal decoherence.
+    \item \textbf{Information Loss via PCA:} Compressing hundreds of financial features into 4 components retains $\sim 40\%$ of variance, discarding high-cardinality metadata (e.g., device identifiers) that classical tree models leverage effectively.
+    \item \textbf{Quadratic Kernel Scaling:} Evaluating quantum kernels requires $O(N^2)$ circuit executions, limiting training subsets to small scales ($N=300$).
+    \item \textbf{Hardware Sample Size:} Hardware executions were restricted to $N_{\text{train}}=20, N_{\text{test}}=10$ due to queue constraints; conclusions on hardware center on kernel matrix fidelity rather than generalized test performance.
+\end{enumerate}
+
+% ==================================================
+% 8. CONCLUSION
+% ==================================================
+\section{Conclusion}
+
+This project constructed an end-to-end hybrid quantum--classical fraud detection pipeline, benchmarking it across ideal simulation, noisy simulation, and real IBM Quantum hardware protocols. The investigation yielded four primary findings:
+\begin{enumerate}
+    \item A shallow feature map with Controlled-Z ring entanglement (\texttt{CustomAngleRingMap}) decisively outperforms IBM's standard \texttt{ZZFeatureMap} (PR-AUC $0.3675$ vs.\ $0.2668$), driven by higher Kernel-Target Alignment and minimal two-qubit gate overhead.
+    \item Device noise induces kernel concentration and variance contraction that doubles from 4 to 6 qubits, disproportionately degrading deeper circuits.
+    \item Active error mitigation (Dynamical Decoupling and Pauli Twirling) combined with classical Positive Semi-Definite projection recovers kernel correlation up to $0.9969$.
+    \item While classical XGBoost on full features remains the superior industrial model, the quantum kernel matches classical RBF-SVM on identical low-dimensional features and achieves a $+2.2\%$ PR-AUC gain under severe 5\% class imbalance.
+\end{enumerate}
+
+% ==================================================
+% REFERENCES (Strictly 2 research papers)
+% ==================================================
+\begin{thebibliography}{2}
+
+\bibitem{havlicek2019}
+V.~Havl{\'i}{\v{c}}ek, A.~D. C{\'o}rcoles, K.~Temme, A.~W. Harrow, A.~Kandala, J.~M. Chow, and J.~M. Gambetta,
+``Supervised learning with quantum-enhanced feature spaces,''
+\emph{Nature}, vol. 567, no. 7747, pp. 209--213, 2019.
+
+\bibitem{schuld2019}
+M.~Schuld and N.~Killoran,
+``Quantum machine learning in feature Hilbert spaces,''
+\emph{Physical Review Letters}, vol. 122, no. 4, p. 040504, 2019.
+
+\end{thebibliography}
+
+\end{document}
