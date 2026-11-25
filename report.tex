@@ -105,8 +105,22 @@ Three distinct $n$-qubit parameterized feature map circuits $U(\mathbf{x})$ were
         \phi_{\{i,j\}}(\mathbf{x}) = (\pi - x_i)(\pi - x_j).
     \end{equation}
     \item \textbf{PauliFeatureMap:} Generalized Pauli rotation circuits incorporating $Z$ and $ZZ$ interaction terms.
-    \item \textbf{CustomAngleRingMap:} A custom shallow circuit applying single-qubit $R_Y(x_i)$ rotations followed by a circular ring of two-qubit Controlled-Z ($CZ$) entangling gates connecting adjacent qubits: $(i, (i+1) \bmod n)$.
+    \item \textbf{CustomAngleRingMap:} A custom shallow circuit applying single-qubit $R_Y(x_i)$ rotations followed by a circular ring of two-qubit Controlled-Z ($CZ$) entangling gates connecting adjacent qubits: $(i, (i+1) \bmod n)$:
+    \begin{equation}
+        U(\mathbf{x}) = \left[ \prod_{i=0}^{n-1} CZ_{i, (i+1) \bmod n} \right] \left[ \bigotimes_{i=0}^{n-1} R_Y(x_i) \right].
+        \label{eq:custom_ring_circuit}
+    \end{equation}
+    Because $R_Y(\theta) = \exp(-i \frac{\theta}{2} Y)$ produces real probability amplitudes in Hilbert space without complex phase accumulation, the statevector remains real-valued, enhancing stability against phase damping.
 \end{enumerate}
+
+Figure~\ref{fig:custom_ring_circuits} depicts the quantum circuit schematic for both the proposed \texttt{CustomAngleRingMap} feature map and the corresponding transition fidelity kernel estimation circuit.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.98\linewidth]{figures/custom_ring_circuits_combined.png}
+\caption{Quantum circuit architectures: (a) The proposed \texttt{CustomAngleRingMap} ($n=4$, reps=1, ring entanglement) comprising continuous feature rotations $R_Y(x_i)$ followed by cyclic Controlled-Z ($CZ$) two-qubit entangling gates $(i, (i+1)\bmod n)$; (b) The complete transition fidelity evaluation circuit $U^{\dagger}(\mathbf{x}') U(\mathbf{x})$ with all-qubit computational basis measurement to evaluate the transition probability $k(\mathbf{x}, \mathbf{x}') = |\langle 0000 | U^{\dagger}(\mathbf{x}') U(\mathbf{x}) | 0000 \rangle|^2$.}
+\label{fig:custom_ring_circuits}
+\end{figure}
 
 Table~\ref{tab:circuit_complexity} details the transpiled circuit depth and two-qubit gate counts compiled for IBM's 127-qubit architecture (\texttt{FakeSherbrooke}) at optimization level 3.
 
